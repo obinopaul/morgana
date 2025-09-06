@@ -1,0 +1,13 @@
+# This file builds and runs the Microsoft MCP server in a container.
+# It exposes the server on a non-standard port (9988) to avoid conflicts.
+services:
+  microsoft-mcp-server:
+    build:
+      context: ./microsoft_mcp
+      dockerfile: Dockerfile
+    container_name: microsoft_mcp_server
+    ports:
+      - "9988:8000" # Maps the container's port 8000 to the host's port 9988
+    env_file:
+      - .env # Passes the environment variables from the .env file to the container
+    restart: unless-stopped

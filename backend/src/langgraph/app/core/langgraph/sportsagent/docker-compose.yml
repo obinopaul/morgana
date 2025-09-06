@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  nba-mcp-server:
+    build:
+      context: ./mcp_servers
+      dockerfile: nba.Dockerfile
+    container_name: nba_mcp_server_container
+    ports:
+      # Map host port 9123 to container port 8000 (a non-standard endpoint)
+      - "9123:8000"
+    restart: always
+    networks:
+      - sports-agent-net
+
+  soccer-mcp-server:
+    build:
+      context: ./mcp_servers
+      dockerfile: soccer.Dockerfile
+    container_name: soccer_mcp_server_container
+    ports:
+      # Map host port 9124 to container port 8000 (another unique endpoint)
+      - "9124:8000"
+    restart: always
+    networks:
+      - sports-agent-net
+
+networks:
+  sports-agent-net:
+    driver: bridge
