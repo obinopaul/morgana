@@ -14,7 +14,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.managed import RemainingSteps 
 
 # Import local tools and the system prompt
-from src.langgraph.app.core.langgraph.toolsagent.tools import local_tools
+from src.langgraph.app.core.langgraph.toolsagent.tools import base_tools
 from src.langgraph.app.core.langgraph.toolsagent.prompts import TOOLS_AGENT_PROMPT
 
 # Load environment variables from .env file
@@ -104,7 +104,7 @@ class ToolsAgent:
                     logger.info(f"Retrying in {delay} seconds...")
                     await asyncio.sleep(delay)
 
-        self.tools = local_tools + mcp_tools
+        self.tools = base_tools + mcp_tools
         
         if not self.tools:
              logger.warning("No tools were loaded at all (neither local nor MCP). The agent will have limited capabilities.")

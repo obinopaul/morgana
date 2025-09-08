@@ -45,8 +45,8 @@ from langgraph.typing import ContextT, StateT
 from pydantic import BaseModel
 from typing_extensions import NotRequired, TypedDict, TypeVar
 
-from langchain.agents.middleware_agent import create_agent as create_middleware_agent
-from langchain.agents.structured_output import (
+from src.langgraph.app.core.langgraph.agents.middleware_agent import create_agent as create_middleware_agent
+from src.langgraph.app.core.langgraph.agents.structured_output import (
     MultipleStructuredOutputsError,
     OutputToolBinding,
     ProviderStrategy,
@@ -55,7 +55,7 @@ from langchain.agents.structured_output import (
     StructuredOutputValidationError,
     ToolStrategy,
 )
-from langchain.agents.tool_node import ToolNode
+from src.langgraph.app.core.langgraph.agents.tool_node import ToolNode
 from langchain.chat_models import init_chat_model
 
 if TYPE_CHECKING:
@@ -64,10 +64,10 @@ if TYPE_CHECKING:
     from langgraph.runtime import Runtime
     from langgraph.store.base import BaseStore
 
-    from langchain.agents._internal._typing import (
+    from src.langgraph.app.core.langgraph.agents._internal._typing import (
         SyncOrAsync,
     )
-    from langchain.agents.types import AgentMiddleware
+    from src.langgraph.app.core.langgraph.agents.middleware.types import AgentMiddleware
 
 StructuredResponseT = TypeVar("StructuredResponseT", default=None)
 

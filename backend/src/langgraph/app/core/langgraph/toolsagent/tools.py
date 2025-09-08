@@ -60,44 +60,6 @@ load_dotenv()
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-#----------------------------------------------------------- Tools i have created -----------------------------------------------------------
-# Tavily Search: Performs web searches using the Tavily search engine, providing accurate and trusted results for general queries.
-# Weather Search: Provides weather information for a given location and date using the OpenWeatherMap API.
-# Route Finder: Finds the optimal route between locations using the Google Maps API.
-# Flight Search: Provides flight information between two locations, including airlines, prices, departure/arrival times, and more.
-# Google Scholar Search: Provides academic research results from Google Scholar, including titles, links, snippets, publication info, citations, and versions.
-# Booking Scraper: Scrapes hotel data from Booking.com based on destination, check-in/check-out dates, and other parameters.
-# Address Validation: Uses Google Maps Address Validation API to validate and refine addresses.
-# Google Maps Static Map: Generates a static map image using the Google Maps Static API.
-# Google Maps Roads API: Calls the Google Maps Roads API for snap-to-roads, nearest-roads, and speed limits.
-# Google Maps Time Zone: Calls the Google Maps Time Zone API to get time zone information for a location.
-# Google Maps Places API: Calls the Google Maps Places API for text search and nearby search.
-# Google Maps Find Place API: Calls the Google Maps Find Place API to find places by text query.
-# Google Maps Place Details API: Calls the Google Maps Place Details API to get detailed information about a place.
-# Google Maps Geolocation: Calls the Google Maps Geolocation API to estimate the device's location.
-# Google Maps Geocoding: Calls the Google Maps Geocoding API to convert addresses to geographic coordinates.
-# Google Maps Elevation: Calls the Google Maps Elevation API to get elevation data for locations.
-# Google Maps Distance Matrix: Calls the Google Maps Distance Matrix API to get travel distance and time data.
-# Google Maps Directions: Calls the Google Maps Directions API to get travel directions.
-# Yelp Business Search: Calls the Yelp Business Search endpoint to find businesses.
-# Yelp Phone Search: Calls the Yelp Phone Search endpoint to find businesses by phone number.
-# Yelp Business Details: Calls the Yelp Business Details endpoint to get information about a business.
-# Yelp Business Reviews: Calls the Yelp Business Reviews endpoint to get reviews for a business.
-# Yelp Events Search: Calls the Yelp Events search endpoint to find local events.
-# Yelp GraphQL: Calls the Yelp GraphQL endpoint with a user-provided query.
-# YouTube Search: Calls the YouTube Data API's 'search' endpoint to find videos.
-# YouTube Videos: Calls the YouTube Data API's 'videos' endpoint to get video details.
-# YouTube CommentThreads: Calls the YouTube Data API's 'commentThreads' endpoint to get video comments.
-# YouTube PlaylistItems: Calls the YouTube Data API's 'playlistItems' endpoint to get playlist items.
-# docling_text_extractor: Extracts text from PDFs with OCR fallback.
-# docling_table_extractor: Extracts structured tables from PDF documents.
-# docling_full_processor: Comprehensive PDF processing with text, OCR, and table extraction.
-# add_file_to_collection: Add a file to the Needle collection.
-# search_collection: Search the Needle collection using a retrieval chain.
-
-
-
-
 #----------------------------------------------------------------------------------------------------------------------------
 # Define Input Schema# Define Input Schema
 class SearchToolInput(BaseModel):
@@ -455,8 +417,8 @@ class GoogleFlightsSearchTool:
 
 flight_tool_instance = GoogleFlightsSearchTool()
 
-flight_tool = Tool(
-    name="Flight Search",
+google_flight_tool = Tool(
+    name="google_flight_tool",
     func=flight_tool_instance.search_flights,
     coroutine=flight_tool_instance.search_flights,
     description="Provides flight information between two locations, including airlines, prices, departure/arrival times, and more.",
@@ -618,8 +580,8 @@ class GoogleFlightsTool:
 google_flight_instance = GoogleFlightsTool()
 
 # Create the tool with both sync and async capabilities
-google_flights_tool = Tool(
-    name="Flight Search",
+google_flight_search = Tool(
+    name="google_flight_search",
     func=google_flight_instance.search_flights,
     coroutine=google_flight_instance.search_flights,
     description="Provides flight information between two locations, including airlines, prices, departure/arrival times, and more.",
@@ -767,7 +729,7 @@ class GoogleFlightsToolSync:
 
 # Initialize the tool
 google_flights_tool_sync = Tool(
-    name="Flight Search",
+    name="google_flights_tool_sync",
     func=GoogleFlightsToolSync().search_flights,
     description="Provides flight information between two locations, including airlines, prices, departure/arrival times, and more.",
     args_schema=FlightSearchInput_2
@@ -861,7 +823,7 @@ booking_scraper_instance = BookingScraperTool()
 
 # ✅ Define the LangChain tool correctly
 booking_tool = Tool(
-    name="Booking Scraper",
+    name="booking_tool",
     func=booking_scraper_instance.search,  # Pass instance method
     coroutine=booking_scraper_instance.search,  # Explicitly define the coroutine
     description="Scrapes hotel data from Booking.com based on destination, check-in/check-out dates, and other parameters.",
@@ -870,7 +832,7 @@ booking_tool = Tool(
 
 #------------------------------------------------------------
 # List of available tools
-TOOLS: List[Callable[..., Any]] = [tavily_search_tool]
+TOOLS: List[Callable[..., Any]] = [tavily_search_tool, booking_tool]
 #------------------------------------------------------------
 
 #---------------------------------------------------------- Places Tool----------------------------------------------------------
@@ -1072,7 +1034,7 @@ google_maps_tool_instance = GoogleMapsPlacesTool()
 
 # ✅ Correctly define the tools for async execution
 google_places_tool = Tool(
-    name="Google Maps Places API",
+    name="google_places_tool",
     func=google_maps_tool_instance.run_places_search,
     coroutine=google_maps_tool_instance.run_places_search,
     description="Calls the Google Maps Places API for text search and nearby search.",
@@ -1080,7 +1042,7 @@ google_places_tool = Tool(
 )
 
 google_find_place_tool = Tool(
-    name="Google Maps Find Place API",
+    name="google_find_place_tool",
     func=google_maps_tool_instance.run_find_place,
     coroutine=google_maps_tool_instance.run_find_place,
     description="Calls the Google Maps Find Place API to find places by text query.",
@@ -1088,101 +1050,12 @@ google_find_place_tool = Tool(
 )
 
 google_place_details_tool = Tool(
-    name="Google Maps Place Details API",
+    name="google_place_details_tool",
     func=google_maps_tool_instance.run_place_details,
     coroutine=google_maps_tool_instance.run_place_details,
     description="Calls the Google Maps Place Details API to get detailed information about a place.",
     args_schema=GoogleMapsPlacesInput
 )
-
-
-#---------------------------------------------------------- Tools Condition ----------------------------------------------------------
-
-def flight_tools_condition(
-    state: Union[list[AnyMessage], dict[str, Any], BaseModel],
-    messages_key: str = "messages",
-) -> Literal["flight_tools", "accomodation_node"]:
-    """Use in the conditional_edge to route to the ToolNode if the last message
-
-    has tool calls. Otherwise, route to the end.
-
-    Args:
-        state (Union[list[AnyMessage], dict[str, Any], BaseModel]): The state to check for
-            tool calls. Must have a list of messages (MessageGraph) or have the
-            "messages" key (StateGraph).
-
-    Returns:
-        The next node to route to.
-    """
-    if isinstance(state, list):
-        ai_message = state[-1]
-    elif isinstance(state, dict) and (messages := state.get(messages_key, [])):
-        ai_message = messages[-1]
-    elif messages := getattr(state, messages_key, []):
-        ai_message = messages[-1]
-    else:
-        raise ValueError(f"No messages found in input state to tool_edge: {state}")
-    if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
-        return "flight_tools"
-    return "accomodation_node"    # you can change this to any other node name instead of "__end__"
-
-
-def accomodation_tools_condition(
-    state: Union[list[AnyMessage], dict[str, Any], BaseModel],
-    messages_key: str = "messages",
-) -> Literal["accomodation_tools", "activity_planner"]:
-    """Use in the conditional_edge to route to the ToolNode if the last message
-
-    has tool calls. Otherwise, route to the end.
-
-    Args:
-        state (Union[list[AnyMessage], dict[str, Any], BaseModel]): The state to check for
-            tool calls. Must have a list of messages (MessageGraph) or have the
-            "messages" key (StateGraph).
-
-    Returns:
-        The next node to route to.
-    """
-    if isinstance(state, list):
-        ai_message = state[-1]
-    elif isinstance(state, dict) and (messages := state.get(messages_key, [])):
-        ai_message = messages[-1]
-    elif messages := getattr(state, messages_key, []):
-        ai_message = messages[-1]
-    else:
-        raise ValueError(f"No messages found in input state to tool_edge: {state}")
-    if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
-        return "accomodation_tools"
-    return "activity_planner"    # you can change this to any other node name instead of "__end__"
-
-
-def activity_planner_tools_condition(
-    state: Union[list[AnyMessage], dict[str, Any], BaseModel],
-    messages_key: str = "messages",
-) -> Literal["activity_planner_tools", "realtime_provider"]:
-    """Use in the conditional_edge to route to the ToolNode if the last message
-
-    has tool calls. Otherwise, route to the end.
-
-    Args:
-        state (Union[list[AnyMessage], dict[str, Any], BaseModel]): The state to check for
-            tool calls. Must have a list of messages (MessageGraph) or have the
-            "messages" key (StateGraph).
-
-    Returns:
-        The next node to route to.
-    """
-    if isinstance(state, list):
-        ai_message = state[-1]
-    elif isinstance(state, dict) and (messages := state.get(messages_key, [])):
-        ai_message = messages[-1]
-    elif messages := getattr(state, messages_key, []):
-        ai_message = messages[-1]
-    else:
-        raise ValueError(f"No messages found in input state to tool_edge: {state}")
-    if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
-        return "activity_planner_tools"
-    return "realtime_provider"    # you can change this to any other node name instead of "__end__"
 
 
 #---------------------------------------------------------- TicketMaster ----------------------------------------------------------
@@ -1297,7 +1170,7 @@ class TicketmasterAPITool:
         }
 
 ticketmaster_tool = Tool(
-    name="Ticketmaster Event Search",
+    name="ticketmaster_tool",
     func=TicketmasterAPITool().search_events,  # Sync-compatible version
     coroutine=TicketmasterAPITool().search_events,  # Explicit async coroutine
     description="Searches for events using the Ticketmaster API.",
@@ -1400,7 +1273,7 @@ class AirbnbScraperTool:
 
 # Define LangChain Tool
 airbnb_tool = Tool(
-    name="Airbnb Scraper",
+    name="airbnb_tool",
     func=AirbnbScraperTool().search,
     coroutine=AirbnbScraperTool().search,  # Explicit async support
     description="Scrapes Airbnb listings based on location and check-in/check-out dates.",
@@ -1413,8 +1286,8 @@ airbnb_tool = Tool(
 
 
 # A list of all local tools for easy import
-local_tools = [
-    tavily_search_tool,
-    flight_tool,
-    # Add other tools from this file here
+base_tools = [
+tavily_search_tool, weather_tool, send_whatsapp_voice_tool, send_whatsapp_message_tool, 
+google_flight_tool, google_flight_search, booking_tool, google_places_tool, google_find_place_tool,
+google_place_details_tool, ticketmaster_tool, airbnb_tool
 ]

@@ -17,8 +17,9 @@ from langgraph.graph.message import (
     REMOVE_ALL_MESSAGES,
 )
 
-from langchain.agents.middleware.types import AgentMiddleware, AgentState
-from langchain.chat_models import BaseChatModel, init_chat_model
+from src.langgraph.app.core.langgraph.agents.middleware.types import AgentMiddleware, AgentState
+from langchain.chat_models import init_chat_model
+from langchain_core.language_models import BaseChatModel
 
 TokenCounter = Callable[[Iterable[MessageLikeRepresentation]], int]
 

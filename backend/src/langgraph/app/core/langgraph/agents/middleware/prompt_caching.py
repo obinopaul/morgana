@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from langchain.agents.middleware.types import AgentMiddleware, AgentState, ModelRequest
+from src.langgraph.app.core.langgraph.agents.middleware.types import AgentMiddleware, AgentState, ModelRequest
 
 
 class AnthropicPromptCachingMiddleware(AgentMiddleware):

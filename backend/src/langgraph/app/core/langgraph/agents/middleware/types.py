@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.tools import BaseTool
 
-    from langchain.agents.structured_output import ResponseFormat
+    from src.langgraph.app.core.langgraph.agents.structured_output import ResponseFormat
 
 JumpTo = Literal["tools", "model", "__end__"]
 """Destination to jump to when a middleware node returns."""

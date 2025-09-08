@@ -13,7 +13,7 @@ from langgraph.graph.state import StateGraph
 from langgraph.typing import ContextT
 from typing_extensions import TypedDict, TypeVar
 
-from langchain.agents.middleware.types import (
+from src.langgraph.app.core.langgraph.agents.middleware.types import (
     AgentMiddleware,
     AgentState,
     JumpTo,
@@ -22,7 +22,7 @@ from langchain.agents.middleware.types import (
 )
 
 # Import structured output classes from the old implementation
-from langchain.agents.structured_output import (
+from src.langgraph.app.core.langgraph.agents.structured_output import (
     MultipleStructuredOutputsError,
     OutputToolBinding,
     ProviderStrategy,
@@ -31,7 +31,7 @@ from langchain.agents.structured_output import (
     StructuredOutputValidationError,
     ToolStrategy,
 )
-from langchain.agents.tool_node import ToolNode
+from src.langgraph.app.core.langgraph.agents.tool_node import ToolNode
 from langchain.chat_models import init_chat_model
 
 STRUCTURED_OUTPUT_ERROR_TEMPLATE = "Error: {error}\n Please fix your mistakes."
