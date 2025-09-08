@@ -25,7 +25,6 @@ from dateutil.parser import parse as parse_datetime
 from fast_flights import FlightData, Passengers, Result, get_flights
 
 import os
-from app.react_agent.configuration import Configuration
 import re
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field

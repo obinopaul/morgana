@@ -1,21 +1,21 @@
 import asyncio
 import os
 import logging
-from typing import List, Sequence, TypedDict, Annotated, Literal, Optional
+from typing import List, Sequence, TypedDict, Annotated, Literal, Optional, Dict, Any
 from dotenv import load_dotenv
 
-from langchain_core.messages import BaseMessage, ToolMessage, AIMessage, HumanMessage
-from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage, HumanMessage
+from src.langgraph.app.core.langgraph.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.graph import StateGraph, END, CompiledGraph
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.base import BaseCheckpointer
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.managed import RemainingSteps 
 
 # Import local tools and the system prompt
-from tools import local_tools
-from prompts import TOOLS_AGENT_PROMPT
+from src.langgraph.app.core.langgraph.toolsagent.tools import local_tools
+from src.langgraph.app.core.langgraph.toolsagent.prompts import TOOLS_AGENT_PROMPT
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,17 +28,22 @@ logger = logging.getLogger(__name__)
 # --- Enhanced Agent Configuration & State ---
 class AgentState(TypedDict):
     """
-    Represents the state of our agent, including robust loop protection.
+    Defines the state of the agent. This is the central data structure that flows
+    through the graph. Using LangGraph's `RemainingSteps` provides robust,
+    built-in loop protection.
 
     Attributes:
         messages: The history of messages in the conversation.
         remaining_steps: The number of steps left before execution is halted.
     """
     messages: Annotated[Sequence[BaseMessage], add_messages]
-    remaining_steps: int
+    remaining_steps: RemainingSteps
 
 class AgentConfig(TypedDict, total=False):
-    """A schema for configuring the agent's compiled graph."""
+    """
+    A schema for configuring the agent's compiled graph, allowing for
+    interrupts before or after specific nodes.
+    """
     interrupt_before: List[str]
     interrupt_after: List[str]
 
@@ -49,25 +54,23 @@ class ToolsAgent:
     tools with tools from a specific list of MCP servers defined in environment variables.
     """
 
-    def __init__(self, llm_provider: type[BaseChatModel], model_name: str, max_steps: int = 15, checkpointer: Optional[BaseCheckpointer] = None):
+    def __init__(self, model_name: str = "gpt-4o", max_steps: int = 15, checkpointer: Optional[BaseCheckpointSaver] = None):
         """
         Initializes the agent's configuration.
 
         Args:
-            llm_provider: The class of the language model to use (e.g., ChatOpenAI).
-            model_name: The specific model name (e.g., "gpt-4o").
+            model_name: The specific OpenAI model name to use (e.g., "gpt-4o").
             max_steps: The maximum number of LLM calls before forcing a stop.
-            checkpointer: An optional LangGraph checkpointer for state persistence.
+            checkpointer: An optional LangGraph checkpointer for state persistence and memory.
         """
-        self.llm_provider = llm_provider
         self.model_name = model_name
         self.max_steps = max_steps
         self.checkpointer = checkpointer
         self.tools: list = []
-        self.tool_node: ToolNode | None = None
         self._initialized_tools = False
+        self.executor: Optional[CompiledStateGraph] = None
 
-    async def _load_and_configure_tools_from_env(self, max_retries: int = 3, delay: int = 5):
+    async def _load_mcp_tools(self, max_retries: int = 3, delay: int = 5):
         """
         Asynchronously connects to the dedicated Microsoft MCP server URL defined
         in the environment and combines its tools with local tools. Includes a retry
@@ -106,134 +109,95 @@ class ToolsAgent:
         if not self.tools:
              logger.warning("No tools were loaded at all (neither local nor MCP). The agent will have limited capabilities.")
         else:
-            self.tool_node = ToolNode(self.tools)
             logger.info(f"Total tools available: {len(self.tools)}. Names: {[tool.name for tool in self.tools]}")
         
         self._initialized_tools = True
 
-    def _should_continue(self, state: AgentState) -> Literal["tools", "__end__"]:
+    async def _build_executor(self, config: Optional[AgentConfig] = None):
         """
-        Determines the next step for the agent based on the last message and step count.
+        Builds and compiles the agent graph using LangChain's create_agent factory.
+        This method is called lazily to ensure tools are loaded before compilation.
         """
-        last_message = state["messages"][-1]
-        
-        if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
-            logger.info("--- Agent decided to end execution (no tool calls). ---")
-            return END
-        
-        if state["remaining_steps"] <= 0:
-            logger.warning("--- Agent has reached the maximum step limit. Halting execution. ---")
-            return END
-            
-        return "tools"
+        if self.executor:
+            return
 
-    async def _call_model(self, state: AgentState) -> dict:
-        """
-        Invokes the language model and decrements the step counter.
-        """
-        logger.info(f"--- AGENT (Remaining Steps: {state['remaining_steps']}): Pondering next move... ---")
+        logger.info("Building and compiling the sports agent executor...")
         
-        remaining_steps = state["remaining_steps"] - 1
+        # Ensure tools are loaded before building the agent
+        await self._load_mcp_tools()
         
-        llm = self.llm_provider(model=self.model_name)
-        llm_with_tools = llm.bind_tools(self.tools)
-        response = await llm_with_tools.ainvoke(state["messages"])
+        # Instantiate the language model
+        llm = ChatOpenAI(model=self.model_name, temperature=0, streaming=True)
         
-        return {"messages": [response], "remaining_steps": remaining_steps}
+        # Use LangChain's factory to create the standard ReAct agent graph
+        self.executor = create_agent(
+            model=llm,
+            tools=self.tools,
+            prompt=TOOLS_AGENT_PROMPT,
+            state_schema=AgentState,
+            checkpointer=self.checkpointer,
+            interrupt_before=config.get("interrupt_before") if config else None,
+            interrupt_after=config.get("interrupt_after") if config else None
+        )
+        logger.info("Sports agent executor compiled successfully.")
 
-    async def _call_tools(self, state: AgentState) -> dict:
+
+
+    async def ainvoke(self, query: str, thread_id: str) -> Dict[str, Any]:
         """
-        Executes tool calls with robust error handling.
-        """
-        if not self.tool_node:
-            return {"messages": []}
+        Asynchronously invokes the agent to get the final result in a single call.
+        This is ideal for multi-agent systems where one agent's complete output is
+        the input for another.
 
-        logger.info("--- AGENT: Executing tool call(s)... ---")
-        try:
-            return await self.tool_node.ainvoke(state)
-        except Exception as e:
-            logger.error(f"--- ERROR: Tool execution failed: {e} ---", exc_info=True)
-            error_messages = []
-            last_message = state["messages"][-1]
-            if isinstance(last_message, AIMessage) and last_message.tool_calls:
-                for tool_call in last_message.tool_calls:
-                    error_messages.append(
-                        ToolMessage(
-                            content=f"Error executing tool '{tool_call['name']}': {e}",
-                            tool_call_id=tool_call["id"],
-                        )
-                    )
-            return {"messages": error_messages}
-
-    def build_graph(self) -> StateGraph:
-        """
-        Builds the uncompiled LangGraph StateGraph. This allows the agent
-        to be integrated as a node in a larger multi-agent system without being
-        pre-compiled.
-        """
-        workflow = StateGraph(AgentState)
-        workflow.add_node("agent", self._call_model)
-        if self.tool_node:
-            workflow.add_node("tools", self._call_tools)
-
-        workflow.set_entry_point("agent")
-        workflow.add_conditional_edges("agent", self._should_continue)
-        
-        if self.tool_node:
-            workflow.add_edge("tools", "agent")
-
-        return workflow
-
-    def get_executor(self, config: Optional[AgentConfig] = None) -> CompiledGraph:
-        """
-        Builds the graph and then compiles it into a runnable executor,
-        applying any provided configurations like checkpointers or interrupts.
-        
         Args:
-            config: An optional dictionary to configure compilation, including
-                    'interrupt_before' and 'interrupt_after' lists.
+            query: The user's query for the agent to process.
+            thread_id: A unique identifier for the conversation thread for memory.
 
         Returns:
-            A compiled LangGraph executor.
+            A dictionary representing the final state of the agent's execution.
         """
-        logger.info("Building and compiling the agent executor...")
-        agent_graph = self.build_graph()
-        
-        config = config or {}
-        
-        agent_executor = agent_graph.compile(
-            checkpointer=self.checkpointer,
-            interrupt_before=config.get("interrupt_before", []),
-            interrupt_after=config.get("interrupt_after", [])
-        )
-        logger.info("Agent executor compiled successfully.")
-        return agent_executor
+        await self._build_executor()
 
+        run_config = {"configurable": {"thread_id": thread_id}}
+        initial_input = {
+            "messages": [HumanMessage(content=query)],
+            "remaining_steps": self.max_steps,
+        }
+
+        logger.info(f"--- Invoking Agent for Thread '{thread_id}' with Query: '{query}' ---")
+        
+        final_state = await self.executor.ainvoke(initial_input, config=run_config)
+        
+        logger.info(f"\n--- Final Answer ---\n{final_state['messages'][-1].content}")
+        return final_state
+    
+    
     async def arun(self, query: str, thread_id: str, config: Optional[AgentConfig] = None):
         """
-        Asynchronously runs the agent with a given query and configuration.
-        """
-        await self._load_and_configure_tools_from_env()
-        
-        agent_executor = self.get_executor(config)
+        Asynchronously runs the agent with a given query and conversation thread ID.
 
-        # Config for the stream/invoke call, including the thread_id for the checkpointer
+        Args:
+            query: The user's query for the agent to process.
+            thread_id: A unique identifier for the conversation thread for memory.
+            config: Optional configuration for setting interrupts.
+        """
+        # Build the executor on the first run
+        await self._build_executor(config)
+
+        # Define the per-run configuration, including the thread_id for memory
         run_config = {"configurable": {"thread_id": thread_id}}
 
+        # Prepare the initial input for the agent graph
         initial_input = {
-            "messages": [
-                HumanMessage(content=TOOLS_AGENT_PROMPT),
-                HumanMessage(content=query)
-            ],
+            "messages": [HumanMessage(content=query)],
             "remaining_steps": self.max_steps,
         }
 
         logger.info(f"--- Running Agent for Thread '{thread_id}' with Query: '{query}' ---")
         
-        events = agent_executor.astream(initial_input, config=run_config, recursion_limit=150)
-        
+        # Stream the agent's execution steps for real-time logging
         try:
-            async for chunk in events:
+            async for chunk in self.executor.astream(initial_input, config=run_config, recursion_limit=150):
                 for key, value in chunk.items():
                     if key == "agent" and value.get('messages'):
                         ai_msg = value['messages'][-1]
@@ -253,27 +217,41 @@ class ToolsAgent:
 async def main():
     """Main function to instantiate and run the agent with advanced features."""
     from langgraph.checkpoint.memory import MemorySaver
-    
-    if not (os.getenv("OPENAI_API_KEY") and os.getenv("TAVILY_API_KEY")):
-        raise ValueError("API keys like OPENAI_API_KEY and TAVILY_API_KEY must be set in the .env file.")
 
-    # 1. Setup persistence (optional, but demonstrates robustness)
+    if not os.getenv("OPENAI_API_KEY"):
+        raise ValueError("OPENAI_API_KEY must be set in the .env file.")
+    if not os.getenv("SPORTS_MCP_SERVERS"):
+        raise ValueError("SPORTS_MCP_SERVERS must be set in the .env file (e.g., 'NBA,SOCCER').")
+
+    # 1. Setup persistence: MemorySaver keeps the state of each conversation in memory.
+    #    For production, you might use RedisSaver, PostgresSaver, etc.
     memory = MemorySaver()
 
-    # 2. Instantiate the agent with the checkpointer
+    # 2. Instantiate the agent with the checkpointer for memory.
     agent = ToolsAgent(llm_provider=ChatOpenAI, model_name="gpt-4o", checkpointer=memory)
     
-    # 3. Define an interrupt configuration (optional guardrail)
-    # This will cause the graph to pause before the 'tools' node is executed.
+    # 3. Define an interrupt configuration to pause execution before the tool node.
+    #    This is useful for debugging or adding human-in-the-loop validation.
     interrupt_config: AgentConfig = {"interrupt_before": ["tools"]}
+    
+    # 4. Define a unique ID for the conversation thread.
+    thread_id = "sports_convo_thread_001"
 
-    # 4. Define a unique ID for the conversation thread
-    thread_id = "user_session_123"
-
-    query = "Using my Microsoft account, what are the subjects of my last 2 emails?"
+    query = "Who was the NBA champion in 2022, and which country won the world cup in 2018?"
+    
+    # 5. Run the agent.
     await agent.arun(query, thread_id=thread_id, config=interrupt_config)
 
 
 if __name__ == "__main__":
+    # To run this code, you need to have your environment variables set up.
+    # Create a .env file with:
+    # OPENAI_API_KEY="your_openai_api_key"
+    # SPORTS_MCP_SERVERS="NBA,SOCCER"
+    # MCP_NBA_SERVER_URL="http://localhost:8001"
+    # MCP_SOCCER_SERVER_URL="http://localhost:8002"
+    # ...and ensure your MCP servers are running.
     asyncio.run(main())
+    
+    
 

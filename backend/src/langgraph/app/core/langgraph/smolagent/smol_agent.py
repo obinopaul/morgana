@@ -1,20 +1,21 @@
 import asyncio
 import os
 import logging
-from typing import List, Sequence, TypedDict, Annotated, Literal, Optional
+from typing import List, Sequence, TypedDict, Annotated, Literal, Optional, Dict, Any
 from dotenv import load_dotenv
 
-from langchain_core.messages import BaseMessage, ToolMessage, AIMessage, HumanMessage, SystemMessage
-from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage, HumanMessage
+from src.langgraph.app.core.langgraph.agents import create_agent
 from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, END, CompiledGraph
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.base import BaseCheckpointer
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.managed import RemainingSteps
 
 # Import local base tools and the system prompt
-from basetools import base_tools
-from prompts import SMOL_AGENT_PROMPT
+from src.langgraph.app.core.langgraph.smolagent.basetools import base_tools
+from src.langgraph.app.core.langgraph.smolagent.prompts import SMOL_AGENT_PROMPT
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,17 +28,22 @@ logger = logging.getLogger(__name__)
 # --- Enhanced Agent Configuration & State ---
 class AgentState(TypedDict):
     """
-    Represents the state of our agent, including robust loop protection.
+    Defines the state of the agent. This is the central data structure that flows
+    through the graph. Using LangGraph's `RemainingSteps` provides robust,
+    built-in loop protection.
 
     Attributes:
         messages: The history of messages in the conversation.
         remaining_steps: The number of steps left before execution is halted.
     """
     messages: Annotated[Sequence[BaseMessage], add_messages]
-    remaining_steps: int
+    remaining_steps: RemainingSteps
 
 class AgentConfig(TypedDict, total=False):
-    """A schema for configuring the agent's compiled graph."""
+    """
+    A schema for configuring the agent's compiled graph, allowing for
+    interrupts before or after specific nodes.
+    """
     interrupt_before: List[str]
     interrupt_after: List[str]
 
@@ -48,143 +54,117 @@ class SMOLAgent:
     base tools. It does not connect to any external MCP servers.
     """
 
-    def __init__(self, llm_provider: type[BaseChatModel], model_name: str, max_steps: int = 10, checkpointer: Optional[BaseCheckpointer] = None):
+    def __init__(self, model_name: str = "gpt-4o", max_steps: int = 15, checkpointer: Optional[BaseCheckpointSaver] = None, tools = None):
         """
-        Initializes the agent, its configuration, and its local tools.
+        Initializes the agent's configuration.
 
         Args:
-            llm_provider: The class of the language model to use (e.g., ChatOpenAI).
-            model_name: The specific model name (e.g., "gpt-4o").
+            model_name: The specific OpenAI model name to use (e.g., "gpt-4o").
             max_steps: The maximum number of LLM calls before forcing a stop.
-            checkpointer: An optional LangGraph checkpointer for state persistence.
+            checkpointer: An optional LangGraph checkpointer for state persistence and memory.
         """
-        self.llm_provider = llm_provider
         self.model_name = model_name
         self.max_steps = max_steps
         self.checkpointer = checkpointer
-        
-        # Directly load local tools upon initialization
-        self.tools = base_tools
-        self.tool_node = ToolNode(self.tools)
-        logger.info(f"SMOLAgent initialized with {len(self.tools)} local tools: {[tool.name for tool in self.tools]}")
+        self.tools: list = tools if tools is not None else base_tools
+        self.executor: Optional[CompiledStateGraph] = None # Compiled agent graph executor
 
-    def _should_continue(self, state: AgentState) -> Literal["tools", "__end__"]:
+    async def _build_executor(self, config: Optional[AgentConfig] = None):
         """
-        Determines the next step for the agent based on the last message and step count.
+        Builds and compiles the agent graph using LangChain's create_agent factory.
+        This method is called lazily to ensure tools are loaded before compilation.
         """
-        last_message = state["messages"][-1]
-        
-        if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
-            logger.info("--- Agent decided to end execution (no tool calls). ---")
-            return END
-        
-        if state["remaining_steps"] <= 0:
-            logger.warning("--- Agent has reached the maximum step limit. Halting execution. ---")
-            return END
-            
-        return "tools"
+        if self.executor:
+            return
 
-    async def _call_model(self, state: AgentState) -> dict:
-        """
-        Invokes the language model and decrements the step counter.
-        """
-        logger.info(f"--- AGENT (Remaining Steps: {state['remaining_steps']}): Pondering next move... ---")
+        logger.info("Building and compiling the sports agent executor...")
         
-        remaining_steps = state["remaining_steps"] - 1
+        # Instantiate the language model
+        llm = ChatOpenAI(model=self.model_name, temperature=0, streaming=True)
         
-        llm = self.llm_provider(model=self.model_name)
-        llm_with_tools = llm.bind_tools(self.tools)
-        response = await llm_with_tools.ainvoke(state["messages"])
-        
-        return {"messages": [response], "remaining_steps": remaining_steps}
-
-    async def _call_tools(self, state: AgentState) -> dict:
-        """
-        Executes tool calls with robust error handling.
-        """
-        logger.info("--- AGENT: Executing tool call(s)... ---")
-        try:
-            return await self.tool_node.ainvoke(state)
-        except Exception as e:
-            logger.error(f"--- ERROR: Tool execution failed: {e} ---", exc_info=True)
-            error_messages = []
-            last_message = state["messages"][-1]
-            if isinstance(last_message, AIMessage) and last_message.tool_calls:
-                for tool_call in last_message.tool_calls:
-                    error_messages.append(
-                        ToolMessage(
-                            content=f"Error executing tool '{tool_call['name']}': {e}",
-                            tool_call_id=tool_call["id"],
-                        )
-                    )
-            return {"messages": error_messages}
-
-    def build_graph(self) -> StateGraph:
-        """
-        Builds the uncompiled LangGraph StateGraph, ready for compilation.
-        """
-        workflow = StateGraph(AgentState)
-        workflow.add_node("agent", self._call_model)
-        workflow.add_node("tools", self._call_tools)
-
-        workflow.set_entry_point("agent")
-        workflow.add_conditional_edges("agent", self._should_continue)
-        workflow.add_edge("tools", "agent")
-
-        return workflow
-
-    def get_executor(self, config: Optional[AgentConfig] = None) -> CompiledGraph:
-        """
-        Builds and compiles the graph into a runnable executor, applying configurations.
-        """
-        logger.info("Building and compiling the SMOLAgent executor...")
-        agent_graph = self.build_graph()
-        
-        config = config or {}
-        
-        agent_executor = agent_graph.compile(
+        # Use LangChain's factory to create the standard ReAct agent graph
+        self.executor = create_agent(
+            model=llm,
+            tools=self.tools,
+            prompt=SMOL_AGENT_PROMPT,
+            state_schema=AgentState,
             checkpointer=self.checkpointer,
-            interrupt_before=config.get("interrupt_before", []),
-            interrupt_after=config.get("interrupt_after", [])
+            interrupt_before=config.get("interrupt_before") if config else None,
+            interrupt_after=config.get("interrupt_after") if config else None
         )
-        logger.info("SMOLAgent executor compiled successfully.")
-        return agent_executor
+        logger.info("Sports agent executor compiled successfully.")
 
-    async def arun(self, query: str, thread_id: str, config: Optional[AgentConfig] = None):
+
+    async def ainvoke(self, messages: Sequence[BaseMessage], thread_id: str) -> Dict[str, Any]:
         """
-        Asynchronously runs the agent with a query, thread_id, and optional config.
+        Asynchronously invokes the agent to get the final result in a single call.
+        This is ideal for multi-agent systems where one agent's complete output is
+        the input for another.
+
+        Args:
+            messages: The list of BaseMessage objects representing the conversation history.
+            thread_id: A unique identifier for the conversation thread for memory.
+
+        Returns:
+            A dictionary representing the final state of the agent's execution.
         """
-        agent_executor = self.get_executor(config)
+        await self._build_executor()
 
         run_config = {"configurable": {"thread_id": thread_id}}
-
         initial_input = {
-            "messages": [
-                SystemMessage(content=SMOL_AGENT_PROMPT),
-                HumanMessage(content=query)
-            ],
+            "messages": messages,
             "remaining_steps": self.max_steps,
         }
 
-        logger.info(f"--- Running Agent for Thread '{thread_id}' with Query: '{query}' ---")
+        logger.info(f"--- Invoking Agent for Thread '{thread_id}' with Messages: {messages} ---")
         
-        final_state = None
-        async for chunk in agent_executor.astream(initial_input, config=run_config, recursion_limit=150):
-            final_state = chunk
-            for key, value in chunk.items():
-                if key == "agent" and value.get('messages'):
-                    ai_msg = value['messages'][-1]
-                    if ai_msg.tool_calls:
-                        tool_names = ", ".join([call['name'] for call in ai_msg.tool_calls])
-                        logger.info(f"Agent requesting tool(s): {tool_names}")
-                elif key == "tools" and value.get('messages'):
-                    tool_msg = value['messages'][-1]
-                    logger.info(f"Tool executed. Result: {str(tool_msg.content)[:100]}...")
+        final_state = await self.executor.ainvoke(initial_input, config=run_config)
+        
+        logger.info(f"\n--- Final Answer ---\n{final_state['messages'][-1].content}")
+        return final_state
+    
+    
+    async def arun(self, messages: Sequence[BaseMessage], thread_id: str, config: Optional[AgentConfig] = None):
+        """
+        Asynchronously runs the agent with a given list of messages and conversation thread ID.
 
-        if final_state:
-            final_message = final_state.get("agent", {}).get("messages", [])[-1]
-            if not final_message.tool_calls:
-                 logger.info(f"\n--- Final Answer ---\n{final_message.content}")
+        Args:
+            messages: The list of BaseMessage objects representing the conversation history.
+            thread_id: A unique identifier for the conversation thread for memory.
+            config: Optional configuration for setting interrupts.
+        """
+        # Build the executor on the first run
+        await self._build_executor(config)
+
+        # Define the per-run configuration, including the thread_id for memory
+        run_config = {"configurable": {"thread_id": thread_id}}
+
+        # Prepare the initial input for the agent graph
+        initial_input = {
+            "messages": messages,
+            "remaining_steps": self.max_steps,
+        }
+
+        logger.info(f"--- Running Agent for Thread '{thread_id}' with Messages: {messages} ---")
+        
+        # Stream the agent's execution steps for real-time logging
+        try:
+            async for chunk in self.executor.astream(initial_input, config=run_config, recursion_limit=150):
+                for key, value in chunk.items():
+                    if key == "agent" and value.get('messages'):
+                        ai_msg = value['messages'][-1]
+                        if ai_msg.tool_calls:
+                            tool_names = ", ".join([call['name'] for call in ai_msg.tool_calls])
+                            logger.info(f"Agent requesting tool(s): {tool_names}")
+                        else:
+                            logger.info(f"\n--- Final Answer ---\n{ai_msg.content}")
+
+                    elif key == "tools" and value.get('messages'):
+                        tool_msg = value['messages'][-1]
+                        logger.info(f"Tool executed. Result: {str(tool_msg.content)[:300]}...")
+        except Exception as e:
+            logger.error(f"An error occurred during agent execution: {e}", exc_info=True)
+            
 
 
 async def main():
@@ -195,7 +175,7 @@ async def main():
         raise ValueError("API keys for OpenAI and Tavily must be set in the .env file.")
 
     memory = MemorySaver()
-    agent = SMOLAgent(llm_provider=ChatOpenAI, model_name="gpt-4o", checkpointer=memory)
+    agent = SMOLAgent(llm_provider=ChatOpenAI, model_name="gpt-4o", checkpointer=memory, tools=base_tools)
     thread_id = "smol_convo_789"
 
     query = "What is the current time and what are the top 3 news headlines in Oklahoma City today?"

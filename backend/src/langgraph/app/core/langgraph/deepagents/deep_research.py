@@ -1,10 +1,12 @@
 import os
 from typing import Literal
-
+from dotenv import load_dotenv
 from tavily import TavilyClient
 
 
-from deepagents import create_deep_agent, SubAgent
+from src.langgraph.app.core.langgraph.deepagents import create_deep_agent, SubAgent
+
+load_dotenv()  # Load environment variables from a .env file if present
 
 # It's best practice to initialize the client once and reuse it.
 tavily_client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
