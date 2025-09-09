@@ -4,12 +4,12 @@ from langchain_core.messages import ToolMessage
 from typing import Annotated, Union
 from langgraph.prebuilt import InjectedState
 
-from deepagents.prompts import (
+from src.langgraph.app.core.langgraph.deepagents.prompts import (
     WRITE_TODOS_DESCRIPTION,
     EDIT_DESCRIPTION,
     TOOL_DESCRIPTION,
 )
-from deepagents.state import Todo, DeepAgentState
+from src.langgraph.app.core.langgraph.deepagents.state import Todo, DeepAgentState
 
 
 @tool(description=WRITE_TODOS_DESCRIPTION)

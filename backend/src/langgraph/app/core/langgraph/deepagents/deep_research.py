@@ -1,10 +1,22 @@
-import os
 from typing import Literal
+import asyncio
+import os
+import logging
+from typing import Literal, Optional, List, Dict, Any
+
 from dotenv import load_dotenv
 from tavily import TavilyClient
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import Runnable
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langchain_core.language_models.base import BaseLanguageModel
+from langgraph.checkpoint.memory import MemorySaver
 
+from src.langgraph.app.core.langgraph.deepagents import create_deep_agent
+from .sub_agent import SubAgent
 
-from src.langgraph.app.core.langgraph.deepagents import create_deep_agent, SubAgent
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 load_dotenv()  # Load environment variables from a .env file if present
 
@@ -28,21 +40,22 @@ def internet_search(
     )
     return search_docs
 
+research_tools = [internet_search]
 
-sub_research_prompt = """You are a dedicated researcher. Your job is to conduct research based on the users questions.
+SUB_RESEARCH_PROMPT = """You are a dedicated researcher. Your job is to conduct research based on the users questions.
 
 Conduct thorough research and then reply to the user with a detailed answer to their question
 
 only your FINAL answer will be passed on to the user. They will have NO knowledge of anything except your final message, so your final report should be your final message!"""
 
-research_sub_agent = {
+RESEARCH_SUB_AGENT = {
     "name": "research-agent",
     "description": "Used to research more in depth questions. Only give this researcher one topic at a time. Do not pass multiple sub questions to this researcher. Instead, you should break down a large topic into the necessary components, and then call multiple research agents in parallel, one for each sub question.",
-    "prompt": sub_research_prompt,
+    "prompt": SUB_RESEARCH_PROMPT,
     "tools": ["internet_search"],
 }
 
-sub_critique_prompt = """You are a dedicated editor. You are being tasked to critique a report.
+SUB_CRITIQUE_PROMPT = """You are a dedicated editor. You are being tasked to critique a report.
 
 You can find the report at `final_report.md`.
 
@@ -64,15 +77,15 @@ Things to check:
 - Check that the article has a clear structure, fluent language, and is easy to understand.
 """
 
-critique_sub_agent = {
+CRITIQUE_SUB_AGENT = {
     "name": "critique-agent",
     "description": "Used to critique the final report. Give this agent some information about how you want it to critique the report.",
-    "prompt": sub_critique_prompt,
+    "prompt": SUB_CRITIQUE_PROMPT,
 }
 
 
 # Prompt prefix to steer the agent to be an expert researcher
-research_instructions = """You are an expert researcher. Your job is to conduct thorough research, and then write a polished report.
+RESEARCH_INSTRUCTIONS = """You are an expert researcher. Your job is to conduct thorough research, and then write a polished report.
 
 The first thing you should do is to write the original user question to `question.txt` so you have a record of it.
 
@@ -161,9 +174,100 @@ You have access to a few tools.
 Use this to run an internet search for a given query. You can specify the number of results, the topic, and whether raw content should be included.
 """
 
-# Create the agent
-agent = create_deep_agent(
-    [internet_search],
-    research_instructions,
-    subagents=[critique_sub_agent, research_sub_agent],
-).with_config({"recursion_limit": 1000})
+# # Create the agent
+# agent = create_deep_agent(
+#     [internet_search],
+#     research_instructions,
+#     subagents=[critique_sub_agent, research_sub_agent],
+#     checkpointer=MemorySaver(),
+# ).with_config({"recursion_limit": 1000})
+
+
+
+# --- Refactored Agent Factory ---
+class DeepResearchAgent:
+    """
+    A factory class for creating a multi-agent deep research system.
+
+    This class encapsulates the configuration for a complex research agent,
+    which uses sub-agents for research and critique to produce a polished,
+    comprehensive report.
+    """
+
+    def __init__(self, llm: Optional[BaseLanguageModel] = None, checkpointer: Optional[BaseCheckpointSaver] = None, tools: Optional[List] = None, sub_agents: Optional[List[SubAgent]] = None):
+        """
+        Initializes the deep research agent factory.
+
+        Args:
+            model: The language model to use for the agent.
+            checkpointer: An optional LangGraph checkpointer for state persistence.
+                          If None, a new in-memory saver will be used.
+        """
+        self.model = llm
+        self.checkpointer = checkpointer if checkpointer is not None else MemorySaver()
+        self.tools = [internet_search] if tools is None else tools
+        self.sub_agents = [CRITIQUE_SUB_AGENT, RESEARCH_SUB_AGENT] if sub_agents is None else sub_agents
+        logger.info("DeepResearchAgent factory initialized.")
+
+    def build(self) -> Runnable:
+        """
+        Builds and compiles the deep research agent graph.
+
+        Returns:
+            A compiled LangGraph runnable (agent executor) ready for execution.
+        """
+        logger.info("Building the deep research agent executor...")
+
+        agent_executor = create_deep_agent(
+            tools=self.tools,
+            model=self.model if self.model else None,
+            instructions=RESEARCH_INSTRUCTIONS,
+            subagents=self.sub_agents,
+            checkpointer=self.checkpointer,
+        ).with_config({"recursion_limit": 1000})
+
+        logger.info("Deep research agent executor built successfully.")
+        return agent_executor
+
+
+async def main():
+    """Main function to demonstrate the DeepResearchAgent factory."""
+    if not os.getenv("TAVILY_API_KEY") or not os.getenv("OPENAI_API_KEY"):
+        raise ValueError("TAVILY_API_KEY and OPENAI_API_KEY must be set in the .env file.")
+
+    # 1. Set up persistence for the conversation
+    memory = MemorySaver()
+
+    # 2. Instantiate the agent factory with the checkpointer
+    agent_factory = DeepResearchAgent(checkpointer=memory)
+
+    # 3. Build the agent executor
+    agent_executor = agent_factory.build()
+
+    # 4. Define the research task and run the agent
+    thread_config = {"configurable": {"thread_id": "deep-research-thread-2"}}
+    query = "What were the main causes and consequences of the 2008 financial crisis? Write the report in Spanish."
+
+    initial_input = [HumanMessage(content=query)]
+
+    logger.info(f"--- Running Deep Research Agent for query: '{query}' ---")
+
+    # Use astream_events to get a detailed stream of the agent's actions
+    async for event in agent_executor.astream_events(initial_input, config=thread_config, version="v1"):
+        kind = event["event"]
+        if kind == "on_chat_model_stream":
+            content = event["data"]["chunk"].content
+            if content:
+                # Print the LLM's thinking and output as it's generated
+                print(content, end="", flush=True)
+        elif kind == "on_tool_end":
+            tool_name = event['name']
+            tool_output = event['data'].get('output')
+            print(f"\n\n--- Finished Tool Call: {tool_name} ---")
+            # You can optionally print the full tool output for debugging
+            # print(tool_output)
+            print("---")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
