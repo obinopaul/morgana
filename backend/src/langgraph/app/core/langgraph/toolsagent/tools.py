@@ -35,6 +35,7 @@ from langchain.prompts.chat import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from pydantic import BaseModel, Field, validator
+from src.langgraph.app.core.langgraph.swarm import create_handoff_tool 
 
 # LangChain Community
 from langchain_community.document_loaders import NeedleLoader
@@ -1281,13 +1282,19 @@ airbnb_tool = Tool(
 )
 
 
+transfer_to_smol_agent = create_handoff_tool(
+    agent_name="Smol_Agent",
+    description="Transfer the user to the Smol_Agent to answer basic questions and implement the solution to the user's request.",
+)
 
-
-
+transfer_to_researcher_agent = create_handoff_tool(
+    agent_name="Deep_Research_Agent",
+    description="Transfer the user to the Deep_Research_Agent to perform deep research and implement the solution to the user's request.",
+)
 
 # A list of all local tools for easy import
 base_tools = [
 tavily_search_tool, weather_tool, send_whatsapp_voice_tool, send_whatsapp_message_tool, 
 google_flight_tool, google_flight_search, booking_tool, google_places_tool, google_find_place_tool,
-google_place_details_tool, ticketmaster_tool, airbnb_tool
+google_place_details_tool, ticketmaster_tool, airbnb_tool, transfer_to_smol_agent, transfer_to_researcher_agent
 ]

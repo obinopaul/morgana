@@ -9,10 +9,12 @@ from tavily import TavilyClient
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import Runnable
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.graph.state import CompiledStateGraph
 from langchain_core.language_models.base import BaseLanguageModel
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.langgraph.app.core.langgraph.deepagents import create_deep_agent
+from src.langgraph.app.core.langgraph.swarm import create_handoff_tool
 from .sub_agent import SubAgent
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -23,6 +25,17 @@ load_dotenv()  # Load environment variables from a .env file if present
 # It's best practice to initialize the client once and reuse it.
 tavily_client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
 
+
+transfer_to_smol_agent = create_handoff_tool(
+    agent_name="Smol_Agent",
+    description="Transfer the user to the Smol_Agent to answer basic questions and implement the solution to the user's request.",
+)
+
+
+transfer_to_tools_agent = create_handoff_tool(
+    agent_name="Tools_Agent",
+    description="Transfer the user to the Tools_Agent to perform practical tasks that may require specific toolsets like sports, google, weather, or more advanced tools and implement the solution to the user's request.",
+)
 
 # Search tool to use to do research
 def internet_search(
@@ -40,7 +53,7 @@ def internet_search(
     )
     return search_docs
 
-research_tools = [internet_search]
+base_tools = [internet_search, transfer_to_smol_agent, transfer_to_tools_agent]
 
 SUB_RESEARCH_PROMPT = """You are a dedicated researcher. Your job is to conduct research based on the users questions.
 
@@ -205,11 +218,11 @@ class DeepResearchAgent:
         """
         self.model = llm
         self.checkpointer = checkpointer if checkpointer is not None else MemorySaver()
-        self.tools = [internet_search] if tools is None else tools
+        self.tools = base_tools if tools is None else tools
         self.sub_agents = [CRITIQUE_SUB_AGENT, RESEARCH_SUB_AGENT] if sub_agents is None else sub_agents
         logger.info("DeepResearchAgent factory initialized.")
 
-    def build(self) -> Runnable:
+    async def build(self) -> CompiledStateGraph:
         """
         Builds and compiles the deep research agent graph.
 

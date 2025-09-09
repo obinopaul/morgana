@@ -9,6 +9,7 @@ load_dotenv()
 from typing import Any, Callable, List, Optional, cast, Dict, Literal, Union
 from pydantic import BaseModel, Field, field_validator
 from langchain.tools import BaseTool, Tool
+from src.langgraph.app.core.langgraph.swarm import create_handoff_tool
 
 # This Pydantic model correctly defines the arguments for the LLM
 class SearchToolInput(BaseModel):
@@ -36,7 +37,19 @@ tavily_search_tool = StructuredTool.from_function(
     args_schema=SearchToolInput,
 )
 
+
+transfer_to_researcher_agent = create_handoff_tool(
+    agent_name="Deep_Research_Agent",
+    description="Transfer the user to the Deep_Research_Agent to perform deep research and implement the solution to the user's request.",
+)
+
+
+transfer_to_tools_agent = create_handoff_tool(
+    agent_name="Tools_Agent",
+    description="Transfer the user to the Tools_Agent to perform practical tasks that may require specific toolsets like sports, travel, google, weather, or more advanced tools and implement the solution to the user's request.",
+) 
+
 # Your list of base tools remains the same
-base_tools = [tavily_search_tool]
+base_tools = [transfer_to_researcher_agent, tavily_search_tool, transfer_to_tools_agent]
 
 
