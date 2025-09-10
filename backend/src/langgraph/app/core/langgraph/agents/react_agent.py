@@ -56,6 +56,7 @@ from src.langgraph.app.core.langgraph.agents.structured_output import (
     ToolStrategy,
 )
 from src.langgraph.app.core.langgraph.agents.tool_node import ToolNode
+from src.langgraph.app.core.langgraph.agents.tool_node import ToolNode, InjectedState, _is_injection, _get_state_args
 from langchain.chat_models import init_chat_model
 
 if TYPE_CHECKING:
@@ -244,6 +245,11 @@ class _AgentBuilder(Generic[StateT, ContextT, StructuredResponseT]):
         self._should_return_direct = {t.name for t in self._tool_classes if t.return_direct}
         self._tool_calling_enabled = len(self._tool_classes) > 0
 
+        # --- ADD THIS LINE ---
+        self._tools_require_state = {
+            tool.name for tool in self._tool_classes if _get_state_args(tool)
+        }
+        
     def _setup_structured_output(self) -> None:
         """Set up structured output tracking for "tools" and "native" strategies.
 
@@ -715,6 +721,14 @@ class _AgentBuilder(Generic[StateT, ContextT, StructuredResponseT]):
                 if self.post_model_hook is not None:
                     return "post_model_hook"
                 return END
+
+            # --- ADD THIS ENTIRE BLOCK ---
+            # Check if any called tool requires state injection.
+            if any(call["name"] in self._tools_require_state for call in last_message.tool_calls):
+                # If so, use the v1 routing method which passes the full state to the ToolNode.
+                return "tools"
+            # --- END OF BLOCK TO ADD ---
+            
             if self.version == "v1":
                 return "tools"
             if self.version == "v2":

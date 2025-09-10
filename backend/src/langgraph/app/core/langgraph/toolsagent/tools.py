@@ -8,7 +8,6 @@ consider implementing more robust and specialized tools tailored to your needs.
 
 from typing import Any, Callable, List, Optional, cast, Dict, Literal, Union
 import base64
-from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import InjectedToolArg
 from typing_extensions import Annotated
@@ -62,37 +61,92 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 #----------------------------------------------------------------------------------------------------------------------------
-# Define Input Schema# Define Input Schema
-class SearchToolInput(BaseModel):
+from langchain_tavily import TavilySearch
+from langchain.tools import StructuredTool
+
+# Load environment variables from a .env file for local development.
+load_dotenv()
+
+# --- Pydantic Input Schema for Robust Validation ---
+class TavilySearchInput(BaseModel):
+    """Input schema for the Tavily Search tool."""
     query: str = Field(..., description="The search query to look up.")
-    max_results: Optional[int] = Field(default=10, description="The maximum number of search results to return.")
+    max_results: Optional[int] = Field(
+        default=5, description="The maximum number of search results to return."
+    )
+    search_depth: Optional[Literal["basic", "advanced"]] = Field(
+        default="advanced", description="The depth of the search: 'basic' or 'advanced'."
+    )
+    topic: Optional[Literal["general", "news", "finance"]] = Field(
+        default="general", description="The topic for the search."
+    )
+    include_domains: Optional[List[str]] = Field(
+        default=None, description="A list of domains to specifically include in the search."
+    )
+    exclude_domains: Optional[List[str]] = Field(
+        default=None, description="A list of domains to specifically exclude from the search."
+    )
 
-# Define the Tool
+
+# --- Production-Ready Tool Class ---
 class TavilySearchTool:
-    def __init__(self, max_results: int = 10):
-        self.max_results = max_results
+    """
+    A robust, production-ready tool for performing web searches with Tavily.
 
-    def search(self, query: str) -> Optional[List[Dict[str, Any]]]:
+    This class encapsulates the logic for the search tool, using Pydantic for
+    input validation and providing a secure way to handle API keys for both
+    local development and production deployment.
+    """
+    def __init__(self, api_key: Optional[str] = None):
         """
-        Perform a web search using the Tavily search engine.
+        Initializes the tool and securely configures the API key.
+        """
+        self.api_key = api_key or os.getenv("TAVILY_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "Tavily API key not provided. Please pass it to the constructor "
+                "or set the TAVILY_API_KEY environment variable."
+            )
+        # Instantiate the TavilySearch tool from the correct package once.
+        self.tool = TavilySearch(tavily_api_key=self.api_key)
+
+
+    def run(self, **kwargs) -> List[Dict[str, Any]]:
+        """
+        Executes the Tavily search with validated input.
+
+        This method is designed to be wrapped by a LangChain StructuredTool.
+        It takes keyword arguments that are validated by the Pydantic schema.
         """
         try:
-            # Initialize the Tavily search tool with the configured max_results
-            search_tool = TavilySearchResults(max_results=self.max_results)
+            # Validate the input using the Pydantic model
+            validated_args = TavilySearchInput(**kwargs)
 
-            # Perform the search (synchronously)
-            result = search_tool.invoke({"query": query})
+            # Convert the Pydantic model to a dictionary for invocation.
+            # exclude_none=True ensures we don't pass optional args if they weren't provided.
+            invoke_args = validated_args.model_dump(exclude_none=True)
 
-            # Return the search results
+            # Perform the search using the validated arguments
+            result = self.tool.invoke(invoke_args)
             return result
         except Exception as e:
-            return {"error": str(e)}
+            # Return a structured error message if something goes wrong
+            return [{"error": f"An error occurred during the search: {e}"}]
 
-tavily_search_tool = Tool(
-    name="Tavily Search",
-    func=TavilySearchTool().search,
-    description="Performs web searches using the Tavily search engine, providing accurate and trusted results for general queries.",
-    args_schema=SearchToolInput
+# --- Create a default instance and a StructuredTool ---
+
+# 1. Instantiate our production-ready class.
+default_tavily_instance = TavilySearchTool()
+
+# 2. Create a StructuredTool from the class method.
+tavily_search_tool = StructuredTool.from_function(
+    name="tavily_web_search",
+    func=default_tavily_instance.run,
+    description=(
+        "A search engine optimized for comprehensive, accurate, and trusted results. "
+        "Use this for any general web search, research, or to find current events."
+    ),
+    args_schema=TavilySearchInput
 )
 
 #----------------------------------------------------------------------------------------------------------------------------
@@ -1282,12 +1336,12 @@ airbnb_tool = Tool(
 )
 
 
-transfer_to_smol_agent = create_handoff_tool(
+transfer_to_Smol_Agent = create_handoff_tool(
     agent_name="Smol_Agent",
     description="Transfer the user to the Smol_Agent to answer basic questions and implement the solution to the user's request.",
 )
 
-transfer_to_researcher_agent = create_handoff_tool(
+transfer_to_Deep_Research_Agent = create_handoff_tool(
     agent_name="Deep_Research_Agent",
     description="Transfer the user to the Deep_Research_Agent to perform deep research and implement the solution to the user's request.",
 )
@@ -1296,5 +1350,5 @@ transfer_to_researcher_agent = create_handoff_tool(
 base_tools = [
 tavily_search_tool, weather_tool, send_whatsapp_voice_tool, send_whatsapp_message_tool, 
 google_flight_tool, google_flight_search, booking_tool, google_places_tool, google_find_place_tool,
-google_place_details_tool, ticketmaster_tool, airbnb_tool, transfer_to_smol_agent, transfer_to_researcher_agent
+google_place_details_tool, ticketmaster_tool, airbnb_tool, transfer_to_Smol_Agent, transfer_to_Deep_Research_Agent
 ]

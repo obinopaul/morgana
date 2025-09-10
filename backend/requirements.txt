@@ -31,3 +31,4 @@ python-docx
 docx2pdf
 pdfkit
 langfuse
+langchain-tavily
