@@ -14,8 +14,8 @@ from typing import (
 
 from langfuse.api.resources.commons.types.trace_with_details import TraceWithDetails
 
-from app.core.logging import logger
-from evals.schemas import ScoreSchema
+from src.langgraph.app.core.logging import logger
+from src.langgraph.evals.schemas import ScoreSchema
 
 
 def format_messages(messages: list[dict]) -> str:

@@ -14,14 +14,14 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import StreamingResponse
-from app.core.metrics import llm_stream_duration_seconds
-from app.api.v1.auth import get_current_session
-from app.core.config import settings
-from app.core.langgraph.graph import LangGraphAgent
-from app.core.limiter import limiter
-from app.core.logging import logger
-from app.models.session import Session
-from app.schemas.chat import (
+from src.langgraph.app.core.metrics import llm_stream_duration_seconds
+from src.langgraph.app.api.v1.auth import get_current_session
+from src.langgraph.app.core.config import settings
+from backend.src.langgraph.app.core.langgraph.llm_graph import LangGraphAgent
+from src.langgraph.app.core.limiter import limiter
+from src.langgraph.app.core.logging import logger
+from src.langgraph.app.models.session import Session
+from src.langgraph.app.schemas.chat import (
     ChatRequest,
     ChatResponse,
     Message,

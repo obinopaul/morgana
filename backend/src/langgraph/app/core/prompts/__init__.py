@@ -3,7 +3,7 @@
 import os
 from datetime import datetime
 
-from app.core.config import settings
+from src.langgraph.app.core.config import settings
 
 
 def load_system_prompt():

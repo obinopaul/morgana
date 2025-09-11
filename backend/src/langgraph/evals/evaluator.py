@@ -17,9 +17,9 @@ from tqdm import tqdm
 
 # Fix import path for app module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.core.config import settings
-from app.core.logging import logger
-from evals.helpers import (
+from src.langgraph.app.core.config import settings
+from src.langgraph.app.core.logging import logger
+from src.langgraph.evals.helpers import (
     calculate_avg_scores,
     generate_report,
     get_input_output,
@@ -29,8 +29,8 @@ from evals.helpers import (
     update_failure_metrics,
     update_success_metrics,
 )
-from evals.metrics import metrics
-from evals.schemas import ScoreSchema
+from src.langgraph.evals.metrics import metrics
+from src.langgraph.evals.schemas import ScoreSchema
 
 
 class Evaluator:

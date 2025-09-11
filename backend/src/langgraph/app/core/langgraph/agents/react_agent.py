@@ -37,7 +37,7 @@ from langchain_core.runnables import (
 from langgraph._internal._runnable import RunnableCallable, RunnableLike
 from langgraph._internal._typing import MISSING
 from langgraph.errors import ErrorCode, create_error_message
-from langgraph.graph import END, StateGraph
+from src.langgraph.app.core.langgraph.llm_graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.managed import RemainingSteps  # noqa: TC002
 from langgraph.types import Checkpointer, Command, Send

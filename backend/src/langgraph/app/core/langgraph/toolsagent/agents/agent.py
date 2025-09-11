@@ -7,7 +7,7 @@ from langchain_core.language_models import LanguageModelLike
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
-from langgraph.graph import END, MessagesState, StateGraph
+from backend.src.langgraph.app.core.langgraph.llm_graph import END, MessagesState, StateGraph
 from typing_extensions import NotRequired, TypedDict, TypeVar
 from langgraph.managed import RemainingSteps 
 from langgraph.prebuilt import ToolNode

@@ -326,6 +326,7 @@ class DeepResearchAgent:
             checkpointer=self.checkpointer,
         ).with_config({"recursion_limit": 1000})
 
+        # agent_executor.name = "Deep_Research_Agent"
         logger.info("Deep research agent executor built successfully.")
         return agent_executor
 

@@ -3,8 +3,8 @@
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import trim_messages as _trim_messages
 
-from app.core.config import settings
-from app.schemas import Message
+from src.langgraph.app.core.config import settings
+from src.langgraph.app.schemas import Message
 
 
 def dump_messages(messages: list[Message]) -> list[dict]:

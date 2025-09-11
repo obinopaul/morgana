@@ -14,40 +14,41 @@ from langchain_core.messages import (
     ToolMessage,
     convert_to_openai_messages,
 )
+from datetime import datetime # <<< IMPORTED
+import copy # <<< IMPORTED
 from langchain_openai import ChatOpenAI
 from langfuse.langchain import CallbackHandler
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langgraph.graph import (
-    END,
-    StateGraph,
-)
+from langgraph.graph import StateGraph, END
+from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import StateSnapshot
 from openai import OpenAIError
 from psycopg_pool import AsyncConnectionPool
 
-from app.core.config import (
+from src.langgraph.app.core.config import (
     Environment,
     settings,
 )
-from app.core.langgraph.tools import tools
-from app.core.logging import logger
-from app.core.metrics import llm_inference_duration_seconds
-from app.core.prompts import SYSTEM_PROMPT
-from app.schemas import (
+from src.langgraph.app.core.langgraph import MORGANA
+from src.langgraph.app.core.logging import logger
+from src.langgraph.app.core.metrics import llm_inference_duration_seconds
+# from src.langgraph.app.core.prompts import SYSTEM_PROMPT
+from src.langgraph.app.schemas import (
     GraphState,
     Message,
 )
-from app.utils import (
+from src.langgraph.app.utils import (
     dump_messages,
     prepare_messages,
 )
 
 
-class LangGraphAgent:
-    """Manages the LangGraph Agent/workflow and interactions with the LLM.
 
-    This class handles the creation and management of the LangGraph workflow,
+class LangGraphAgent:
+    """Manages the MORGANA multi-agent system and its interactions with the application.
+
+    This class handles the creation and management of the MORGANA workflow,
     including LLM interactions, database connections, and response processing.
     """
 
@@ -59,13 +60,14 @@ class LangGraphAgent:
             temperature=settings.DEFAULT_LLM_TEMPERATURE,
             api_key=settings.LLM_API_KEY,
             max_tokens=settings.MAX_TOKENS,
+            streaming=True, # Ensure streaming is enabled for MORGANA
             **self._get_model_kwargs(),
-        ).bind_tools(tools)
-        self.tools_by_name = {tool.name: tool for tool in tools}
+        )
+        # self.tools_by_name = {tool.name: tool for tool in tools}
         self._connection_pool: Optional[AsyncConnectionPool] = None
-        self._graph: Optional[CompiledStateGraph] = None
+        self._agent_executor: Optional[CompiledStateGraph] = None
 
-        logger.info("llm_initialized", model=settings.LLM_MODEL, environment=settings.ENVIRONMENT.value)
+        logger.info("llm_initialized_for_morgana", model=settings.LLM_MODEL, environment=settings.ENVIRONMENT.value)
 
     def _get_model_kwargs(self) -> Dict[str, Any]:
         """Get environment-specific model kwargs.
@@ -118,167 +120,78 @@ class LangGraphAgent:
                     return None
                 raise e
         return self._connection_pool
-
-    async def _chat(self, state: GraphState) -> dict:
-        """Process the chat state and generate a response.
-
-        Args:
-            state (GraphState): The current state of the conversation.
+    
+    async def _get_or_create_agent_executor(self) -> Optional[CompiledStateGraph]:
+        """Create and compile the MORGANA agent executor if it doesn't exist.
 
         Returns:
-            dict: Updated state with new messages.
+            Optional[CompiledStateGraph]: The compiled MORGANA agent or None if initialization fails.
         """
-        messages = prepare_messages(state.messages, self.llm, SYSTEM_PROMPT)
-
-        llm_calls_num = 0
-
-        # Configure retry attempts based on environment
-        max_retries = settings.MAX_LLM_CALL_RETRIES
-
-        for attempt in range(max_retries):
+        if self._agent_executor is None:
             try:
-                with llm_inference_duration_seconds.labels(model=self.llm.model_name).time():
-                    generated_state = {"messages": [await self.llm.ainvoke(dump_messages(messages))]}
-                logger.info(
-                    "llm_response_generated",
-                    session_id=state.session_id,
-                    llm_calls_num=llm_calls_num + 1,
-                    model=settings.LLM_MODEL,
-                    environment=settings.ENVIRONMENT.value,
-                )
-                return generated_state
-            except OpenAIError as e:
-                logger.error(
-                    "llm_call_failed",
-                    llm_calls_num=llm_calls_num,
-                    attempt=attempt + 1,
-                    max_retries=max_retries,
-                    error=str(e),
-                    environment=settings.ENVIRONMENT.value,
-                )
-                llm_calls_num += 1
-
-                # In production, we might want to fall back to a more reliable model
-                if settings.ENVIRONMENT == Environment.PRODUCTION and attempt == max_retries - 2:
-                    fallback_model = "gpt-4o"
-                    logger.warning(
-                        "using_fallback_model", model=fallback_model, environment=settings.ENVIRONMENT.value
-                    )
-                    self.llm.model_name = fallback_model
-
-                continue
-
-        raise Exception(f"Failed to get a response from the LLM after {max_retries} attempts")
-
-    # Define our tool node
-    async def _tool_call(self, state: GraphState) -> GraphState:
-        """Process tool calls from the last message.
-
-        Args:
-            state: The current agent state containing messages and tool calls.
-
-        Returns:
-            Dict with updated messages containing tool responses.
-        """
-        outputs = []
-        for tool_call in state.messages[-1].tool_calls:
-            tool_result = await self.tools_by_name[tool_call["name"]].ainvoke(tool_call["args"])
-            outputs.append(
-                ToolMessage(
-                    content=tool_result,
-                    name=tool_call["name"],
-                    tool_call_id=tool_call["id"],
-                )
-            )
-        return {"messages": outputs}
-
-    def _should_continue(self, state: GraphState) -> Literal["end", "continue"]:
-        """Determine if the agent should continue or end based on the last message.
-
-        Args:
-            state: The current agent state containing messages.
-
-        Returns:
-            Literal["end", "continue"]: "end" if there are no tool calls, "continue" otherwise.
-        """
-        messages = state.messages
-        last_message = messages[-1]
-        # If there is no function call, then we finish
-        if not last_message.tool_calls:
-            return "end"
-        # Otherwise if there is, we continue
-        else:
-            return "continue"
-
-    async def create_graph(self) -> Optional[CompiledStateGraph]:
-        """Create and configure the LangGraph workflow.
-
-        Returns:
-            Optional[CompiledStateGraph]: The configured LangGraph instance or None if init fails
-        """
-        if self._graph is None:
-            try:
-                graph_builder = StateGraph(GraphState)
-                graph_builder.add_node("chat", self._chat)
-                graph_builder.add_node("tool_call", self._tool_call)
-                graph_builder.add_conditional_edges(
-                    "chat",
-                    self._should_continue,
-                    {"continue": "tool_call", "end": END},
-                )
-                graph_builder.add_edge("tool_call", "chat")
-                graph_builder.set_entry_point("chat")
-                graph_builder.set_finish_point("chat")
-
-                # Get connection pool (may be None in production if DB unavailable)
                 connection_pool = await self._get_connection_pool()
+                checkpointer = None
                 if connection_pool:
                     checkpointer = AsyncPostgresSaver(connection_pool)
                     await checkpointer.setup()
-                else:
-                    # In production, proceed without checkpointer if needed
-                    checkpointer = None
-                    if settings.ENVIRONMENT != Environment.PRODUCTION:
-                        raise Exception("Connection pool initialization failed")
+                elif settings.ENVIRONMENT != Environment.PRODUCTION:
+                    raise Exception("Connection pool initialization failed in a non-production environment.")
 
-                self._graph = graph_builder.compile(
-                    checkpointer=checkpointer, name=f"{settings.PROJECT_NAME} Agent ({settings.ENVIRONMENT.value})"
-                )
+                # Instantiate the MORGANA factory with the LLM and checkpointer
+                morgana_factory = MORGANA(llm=self.llm, checkpointer=checkpointer)
+
+                # Build and compile the agent executor
+                self._agent_executor = await morgana_factory.build()
 
                 logger.info(
-                    "graph_created",
-                    graph_name=f"{settings.PROJECT_NAME} Agent",
+                    "morgana_agent_executor_created",
+                    graph_name="MORGANA Multi-Agent Swarm",
                     environment=settings.ENVIRONMENT.value,
                     has_checkpointer=checkpointer is not None,
                 )
             except Exception as e:
-                logger.error("graph_creation_failed", error=str(e), environment=settings.ENVIRONMENT.value)
-                # In production, we don't want to crash the app
+                logger.error("morgana_agent_creation_failed", error=str(e), environment=settings.ENVIRONMENT.value)
                 if settings.ENVIRONMENT == Environment.PRODUCTION:
-                    logger.warning("continuing_without_graph")
+                    logger.warning("continuing_without_agent_executor")
                     return None
                 raise e
+        return self._agent_executor
 
-        return self._graph
+    def _prepare_input_with_timestamp(self, messages: list[Message]) -> list[Message]:
+        """Appends the current timestamp to the last human message."""
+        if not messages or messages[-1].role != "user":
+            return messages
 
+        # Use deepcopy to avoid modifying the original messages list
+        messages_with_timestamp = copy.deepcopy(messages)
+        
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S CDT")
+        timestamp_info = f"\n\n[Current Time: {current_time}]"
+        
+        # Append to the content of the last message
+        messages_with_timestamp[-1].content += timestamp_info
+        return messages_with_timestamp
+    
     async def get_response(
         self,
         messages: list[Message],
         session_id: str,
         user_id: Optional[str] = None,
     ) -> list[dict]:
-        """Get a response from the LLM.
+        """Get a response from the MORGANA agent.
 
         Args:
-            messages (list[Message]): The messages to send to the LLM.
-            session_id (str): The session ID for Langfuse tracking.
+            messages (list[Message]): The messages to send to the agent.
+            session_id (str): The session ID for conversation tracking.
             user_id (Optional[str]): The user ID for Langfuse tracking.
 
         Returns:
-            list[dict]: The response from the LLM.
+            list[dict]: The final response from the agent.
         """
-        if self._graph is None:
-            self._graph = await self.create_graph()
+        agent_executor = await self._get_or_create_agent_executor()
+        if not agent_executor:
+            raise RuntimeError("Agent executor could not be initialized.")
+
         config = {
             "configurable": {"thread_id": session_id},
             "callbacks": [CallbackHandler()],
@@ -288,29 +201,40 @@ class LangGraphAgent:
                 "environment": settings.ENVIRONMENT.value,
                 "debug": False,
             },
+            "recursion_limit": 150, # Set a robust recursion limit
         }
+
+        # MORGANA expects a specific input structure, typically a list of BaseMessages.
+        # The last message from the user is the primary input.
+        # initial_input = {"messages": [HumanMessage(content=messages[-1].content)]}
+        final_messages = self._prepare_input_with_timestamp(messages)
+        initial_input = {"messages": dump_messages(final_messages)}
+
         try:
-            response = await self._graph.ainvoke(
-                {"messages": dump_messages(messages), "session_id": session_id}, config
-            )
+            with llm_inference_duration_seconds.labels(model=self.llm.model_name).time():
+                 response = await agent_executor.ainvoke(initial_input, config)
             return self.__process_messages(response["messages"])
         except Exception as e:
-            logger.error(f"Error getting response: {str(e)}")
+            logger.error(f"Error getting response from MORGANA: {str(e)}", session_id=session_id)
             raise e
 
     async def get_stream_response(
         self, messages: list[Message], session_id: str, user_id: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
-        """Get a stream response from the LLM.
+        """Get a streaming response from the MORGANA agent.
 
         Args:
-            messages (list[Message]): The messages to send to the LLM.
+            messages (list[Message]): The messages to send to the agent.
             session_id (str): The session ID for the conversation.
             user_id (Optional[str]): The user ID for the conversation.
 
         Yields:
-            str: Tokens of the LLM response.
+            str: Tokens of the LLM response from the agent swarm.
         """
+        agent_executor = await self._get_or_create_agent_executor()
+        if not agent_executor:
+            raise RuntimeError("Agent executor could not be initialized.")
+
         config = {
             "configurable": {"thread_id": session_id},
             "callbacks": [
@@ -318,26 +242,27 @@ class LangGraphAgent:
                     environment=settings.ENVIRONMENT.value, debug=False, user_id=user_id, session_id=session_id
                 )
             ],
+            "recursion_limit": 150,
         }
-        if self._graph is None:
-            self._graph = await self.create_graph()
+        # initial_input = {"messages": [HumanMessage(content=messages[-1].content)]}
+        final_messages = self._prepare_input_with_timestamp(messages)
+        initial_input = {"messages": dump_messages(final_messages)}
 
         try:
-            async for token, _ in self._graph.astream(
-                {"messages": dump_messages(messages), "session_id": session_id}, config, stream_mode="messages"
-            ):
-                try:
-                    yield token.content
-                except Exception as token_error:
-                    logger.error("Error processing token", error=str(token_error), session_id=session_id)
-                    # Continue with next token even if current one fails
-                    continue
+            # The MORGANA swarm outputs dictionary chunks. We need to parse them.
+            async for chunk in agent_executor.astream(initial_input, config):
+                for agent_name, agent_output in chunk.items():
+                    if output_messages := agent_output.get("messages"):
+                        # Yield the content of the last message in the chunk
+                        last_message = output_messages[-1]
+                        if last_message and last_message.content and isinstance(last_message.content, str):
+                            yield last_message.content
         except Exception as stream_error:
-            logger.error("Error in stream processing", error=str(stream_error), session_id=session_id)
+            logger.error("Error in MORGANA stream processing", error=str(stream_error), session_id=session_id)
             raise stream_error
 
     async def get_chat_history(self, session_id: str) -> list[Message]:
-        """Get the chat history for a given thread ID.
+        """Get the chat history for a given thread ID from the checkpointer.
 
         Args:
             session_id (str): The session ID for the conversation.
@@ -345,17 +270,25 @@ class LangGraphAgent:
         Returns:
             list[Message]: The chat history.
         """
-        if self._graph is None:
-            self._graph = await self.create_graph()
+        agent_executor = await self._get_or_create_agent_executor()
+        if not agent_executor:
+            logger.warning("Cannot get chat history, agent executor not initialized.")
+            return []
 
-        state: StateSnapshot = await sync_to_async(self._graph.get_state)(
-            config={"configurable": {"thread_id": session_id}}
-        )
-        return self.__process_messages(state.values["messages"]) if state.values else []
+        try:
+            state: StateSnapshot = await sync_to_async(agent_executor.get_state)(
+                config={"configurable": {"thread_id": session_id}}
+            )
+            return self.__process_messages(state.values.get("messages", [])) if state and state.values else []
+        except Exception as e:
+            logger.error("Failed to retrieve chat history", error=str(e), session_id=session_id)
+            return []
 
     def __process_messages(self, messages: list[BaseMessage]) -> list[Message]:
+        """Converts BaseMessages to a serializable format, filtering for user/assistant roles."""
+        if not messages:
+            return []
         openai_style_messages = convert_to_openai_messages(messages)
-        # keep just assistant and user messages
         return [
             Message(**message)
             for message in openai_style_messages
@@ -363,28 +296,25 @@ class LangGraphAgent:
         ]
 
     async def clear_chat_history(self, session_id: str) -> None:
-        """Clear all chat history for a given thread ID.
+        """Clear all chat history for a given thread ID from the database.
 
         Args:
             session_id: The ID of the session to clear history for.
-
-        Raises:
-            Exception: If there's an error clearing the chat history.
         """
         try:
-            # Make sure the pool is initialized in the current event loop
             conn_pool = await self._get_connection_pool()
+            if not conn_pool:
+                logger.warning("Cannot clear history, no connection pool available.")
+                return
 
-            # Use a new connection for this specific operation
             async with conn_pool.connection() as conn:
                 for table in settings.CHECKPOINT_TABLES:
                     try:
-                        await conn.execute(f"DELETE FROM {table} WHERE thread_id = %s", (session_id,))
+                        await conn.execute(f'DELETE FROM "{table}" WHERE thread_id = %s', (session_id,))
                         logger.info(f"Cleared {table} for session {session_id}")
                     except Exception as e:
-                        logger.error(f"Error clearing {table}", error=str(e))
-                        raise
-
+                        logger.error(f"Error clearing {table} for session {session_id}", error=str(e))
+                        # Continue to try clearing other tables
         except Exception as e:
-            logger.error("Failed to clear chat history", error=str(e))
+            logger.error("Failed to clear chat history", error=str(e), session_id=session_id)
             raise

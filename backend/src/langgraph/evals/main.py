@@ -20,9 +20,9 @@ from tqdm import tqdm
 
 # Fix import path for app module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.core.config import settings
-from app.core.logging import logger
-from evals.evaluator import Evaluator
+from src.langgraph.app.core.config import settings
+from src.langgraph.app.core.logging import logger
+from src.langgraph.evals.evaluator import Evaluator
 
 # Default configuration
 DEFAULT_CONFIG = {

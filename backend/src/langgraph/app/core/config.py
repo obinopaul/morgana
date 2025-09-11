@@ -131,10 +131,10 @@ class Settings:
         self.ENVIRONMENT = get_environment()
 
         # Application Settings
-        self.PROJECT_NAME = os.getenv("PROJECT_NAME", "FastAPI LangGraph Template")
+        self.PROJECT_NAME = os.getenv("PROJECT_NAME", "MORGANA")
         self.VERSION = os.getenv("VERSION", "1.0.0")
         self.DESCRIPTION = os.getenv(
-            "DESCRIPTION", "A production-ready FastAPI template with LangGraph and Langfuse integration"
+            "DESCRIPTION", "Morgana is a sophisticated, voice-first AI assistant that combines a powerful multi-agent backend with an expressive, animated frontend"
         )
         self.API_V1_STR = os.getenv("API_V1_STR", "/api/v1")
         self.DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1", "t", "yes")

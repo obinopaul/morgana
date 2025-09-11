@@ -10,10 +10,10 @@ from sqlmodel import (
     Relationship,
 )
 
-from app.models.base import BaseModel
+from src.langgraph.app.models.base import BaseModel
 
 if TYPE_CHECKING:
-    from app.models.user import User
+    from src.langgraph.app.models.user import User
 
 
 class Session(BaseModel, table=True):

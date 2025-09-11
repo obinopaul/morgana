@@ -21,13 +21,13 @@ from langfuse import Langfuse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api.v1.api import api_router
-from app.core.config import settings
-from app.core.limiter import limiter
-from app.core.logging import logger
-from app.core.metrics import setup_metrics
-from app.core.middleware import MetricsMiddleware
-from app.services.database import database_service
+from src.langgraph.app.api.v1.api import api_router
+from src.langgraph.app.core.config import settings
+from src.langgraph.app.core.limiter import limiter
+from src.langgraph.app.core.logging import logger
+from src.langgraph.app.core.metrics import setup_metrics
+from src.langgraph.app.core.middleware import MetricsMiddleware
+from src.langgraph.app.services.database import database_service
 
 # Load environment variables
 load_dotenv()

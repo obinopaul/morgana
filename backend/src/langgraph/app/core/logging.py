@@ -18,7 +18,7 @@ from typing import (
 
 import structlog
 
-from app.core.config import (
+from src.langgraph.app.core.config import (
     Environment,
     settings,
 )
