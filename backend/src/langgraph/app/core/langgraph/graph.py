@@ -213,6 +213,10 @@ class LangGraphAgent:
         try:
             with llm_inference_duration_seconds.labels(model=self.llm.model_name).time():
                  response = await agent_executor.ainvoke(initial_input, config)
+
+            # Extract the final state from the last active agent's output
+            # final_agent_output = list(response.values())[0]
+            # return self.__process_messages(final_agent_output["messages"])
             return self.__process_messages(response["messages"])
         except Exception as e:
             logger.error(f"Error getting response from MORGANA: {str(e)}", session_id=session_id)

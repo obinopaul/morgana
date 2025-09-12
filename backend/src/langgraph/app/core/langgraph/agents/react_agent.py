@@ -245,7 +245,6 @@ class _AgentBuilder(Generic[StateT, ContextT, StructuredResponseT]):
         self._should_return_direct = {t.name for t in self._tool_classes if t.return_direct}
         self._tool_calling_enabled = len(self._tool_classes) > 0
 
-        # --- ADD THIS LINE ---
         self._tools_require_state = {
             tool.name for tool in self._tool_classes if _get_state_args(tool)
         }
